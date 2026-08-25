@@ -68,15 +68,29 @@ rep('case WM_PAINT:paint(hwnd);return 0;',
 rep('case WM_TIMER:holdStep();if(g_state.screen()!=Screen::Settings)InvalidateRect(hwnd,nullptr,FALSE);return 0;',
     'case WM_TIMER:holdStep();if(g_state.presentation()==Presentation::Pip || g_state.screen()!=Screen::Settings)InvalidateRect(hwnd,nullptr,FALSE);return 0;')
 
-# Hero top chrome: keep the existing device icons and add a direct Settings gear just left of E.
+# Remove the long decorative divider strokes. Hero chrome should float like hardware controls,
+# not look like underscored wireframe UI.
+rep('''    Pen inner(Color(70,242,195,61),1.f);
+    g.DrawLine(&inner,bay.X+34,bay.Y+18,bay.GetRight()-34,bay.Y+18);
+''', '')
+rep('''    Pen goldLine(Color(72,242,195,61),1.f);
+    g.DrawLine(&goldLine,shell.X+32,shell.Y+18,shell.GetRight()-32,shell.Y+18);
+''', '')
+
+# Hero top chrome is now functional: hamburger -> Queue, gear -> Settings, E -> Hero/Home.
+# The right-side overflow glyph remains visual-only until a real menu exists.
 rep('''    text(g,L"≡",R(shell.X+22,shell.Y+20,36,28),16,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
     text(g,L"E",R(shell.X+shell.Width/2-18,shell.Y+20,36,28),13,amber(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
     text(g,L"⋮",R(shell.GetRight()-58,shell.Y+20,36,28),18,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);''',
-'''    text(g,L"≡",R(shell.X+22,shell.Y+20,36,28),16,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+'''    RectF queueMenu=R(shell.X+22,shell.Y+20,36,28);
+    text(g,L"≡",queueMenu,16,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+    addHit(queueMenu,ActQueue);
     RectF settingsGear=R(shell.X+shell.Width/2-62,shell.Y+20,36,28);
     text(g,L"⚙",settingsGear,15,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
     addHit(settingsGear,ActSettings);
-    text(g,L"E",R(shell.X+shell.Width/2-18,shell.Y+20,36,28),13,amber(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+    RectF homeE=R(shell.X+shell.Width/2-18,shell.Y+20,36,28);
+    text(g,L"E",homeE,13,amber(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+    addHit(homeE,ActHero);
     text(g,L"⋮",R(shell.GetRight()-58,shell.Y+20,36,28),18,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);''')
 
 # Remote: keep the same centered analyzer tuck, just lower it enough to clear QUEUE / SEEK / DOWN.
