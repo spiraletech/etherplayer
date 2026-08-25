@@ -11,7 +11,8 @@ enum class Screen {
     Hero,
     Browse,
     Queue,
-    Remote
+    Remote,
+    Settings
 };
 
 enum class Presentation {
@@ -24,14 +25,20 @@ enum class BrowseSection {
     Playlists,
     Artists,
     Albums,
-    Songs,
-    Queue
+    Queue,
+    Settings
 };
 
 struct Track {
     std::wstring path;
     std::wstring title;
     std::wstring artist;
+    std::wstring album;
+    std::wstring genre;
+    std::wstring year;
+    std::wstring trackNumber;
+    std::wstring bpm;
+    std::wstring comment;
 };
 
 class PlayerState {
@@ -70,6 +77,16 @@ public:
     void playNext(std::size_t libraryIndex);
     void addToQueue(std::size_t libraryIndex);
     void clearQueue();
+
+    bool updateTrackMetadata(std::size_t libraryIndex,
+                             const std::wstring& title,
+                             const std::wstring& artist,
+                             const std::wstring& album,
+                             const std::wstring& genre,
+                             const std::wstring& year,
+                             const std::wstring& trackNumber,
+                             const std::wstring& bpm,
+                             const std::wstring& comment);
 
     void setScreen(Screen screen) noexcept;
     [[nodiscard]] Screen screen() const noexcept;
