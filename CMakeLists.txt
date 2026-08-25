@@ -22,8 +22,13 @@ else()
 endif()
 
 if(WIN32)
+    enable_language(RC)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
     set(ETHERPLAYER_WIN112 ${CMAKE_SOURCE_DIR}/generated/EtherPlayerWin112.cpp)
+    set(ETHERPLAYER_ICON ${CMAKE_SOURCE_DIR}/generated/etherplayer.ico)
+    set(ETHERPLAYER_RC ${CMAKE_SOURCE_DIR}/generated/etherplayer.rc)
+
     add_custom_command(
         OUTPUT ${ETHERPLAYER_WIN112}
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/make_v112.py
@@ -42,7 +47,17 @@ if(WIN32)
         COMMENT "Generating EtherPlayer v1.1.2 Windows shell"
         VERBATIM
     )
-    add_executable(EtherPlayer WIN32 ${ETHERPLAYER_WIN112})
+
+    add_custom_command(
+        OUTPUT ${ETHERPLAYER_ICON} ${ETHERPLAYER_RC}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/make_app_icon.py
+        DEPENDS ${CMAKE_SOURCE_DIR}/tools/make_app_icon.py
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Generating EtherPlayer Windows icon resource"
+        VERBATIM
+    )
+
+    add_executable(EtherPlayer WIN32 ${ETHERPLAYER_WIN112} ${ETHERPLAYER_RC})
     target_include_directories(EtherPlayer PRIVATE include)
     target_compile_definitions(EtherPlayer PRIVATE UNICODE _UNICODE NOMINMAX)
     if(MSVC)
@@ -53,5 +68,5 @@ if(WIN32)
         ole32 oleaut32 mfplat mfplay mfreadwrite mfuuid
         comdlg32 gdiplus shell32 dwmapi
     )
-    set_target_properties(EtherPlayer PROPERTIES OUTPUT_NAME "ETHERPLAYER")
+    set_target_properties(EtherPlayer PROPERTIES OUTPUT_NAME "ETHERPLAYERv1.0")
 endif()
