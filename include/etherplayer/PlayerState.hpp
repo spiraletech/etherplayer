@@ -49,6 +49,22 @@ public:
     bool selectLibraryTrack(std::size_t libraryIndex, bool enqueueRest = false);
     bool playQueueIndex(std::size_t queueIndex);
     bool moveQueueItem(std::size_t from, std::size_t to);
+    bool removeQueueItem(std::size_t queueIndex) {
+        if (queueIndex >= queue_.size()) return false;
+        const bool beforeCurrent = queueIndex < queueIndex_;
+        const bool removingCurrent = queueIndex == queueIndex_;
+        queue_.erase(queue_.begin() + static_cast<std::ptrdiff_t>(queueIndex));
+        if (queue_.empty()) {
+            queueIndex_ = 0;
+            return true;
+        }
+        if (beforeCurrent && queueIndex_ > 0) {
+            --queueIndex_;
+        } else if (removingCurrent && queueIndex_ >= queue_.size()) {
+            queueIndex_ = queue_.size() - 1;
+        }
+        return true;
+    }
     bool next();
     bool previous();
     void playNext(std::size_t libraryIndex);
