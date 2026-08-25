@@ -1,5 +1,9 @@
 #include "etherplayer/PlayerState.hpp"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <cstdlib>
 #include <cwctype>
