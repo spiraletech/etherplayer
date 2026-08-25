@@ -49,6 +49,7 @@ public:
     bool selectLibraryTrack(std::size_t libraryIndex, bool enqueueRest = false);
     bool playQueueIndex(std::size_t queueIndex);
     bool moveQueueItem(std::size_t from, std::size_t to);
+    bool removeQueueItem(std::size_t queueIndex);
     bool next();
     bool previous();
     void playNext(std::size_t libraryIndex);
