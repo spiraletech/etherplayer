@@ -26,7 +26,7 @@ if(WIN32)
     set(ETHERPLAYER_WIN110 ${CMAKE_SOURCE_DIR}/generated/EtherPlayerWin110.cpp)
     add_custom_command(
         OUTPUT ${ETHERPLAYER_WIN110}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/make_v110.py
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/make_v110fix.py
         DEPENDS
             ${CMAKE_SOURCE_DIR}/src/win32/EtherPlayerWin.cpp
             ${CMAKE_SOURCE_DIR}/tools/make_v012.py
@@ -34,6 +34,7 @@ if(WIN32)
             ${CMAKE_SOURCE_DIR}/tools/make_v0131.py
             ${CMAKE_SOURCE_DIR}/tools/make_v101.py
             ${CMAKE_SOURCE_DIR}/tools/make_v110.py
+            ${CMAKE_SOURCE_DIR}/tools/make_v110fix.py
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         COMMENT "Generating EtherPlayer v1.1 Windows shell"
         VERBATIM
