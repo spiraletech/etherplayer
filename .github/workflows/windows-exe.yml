@@ -24,6 +24,6 @@ jobs:
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
-          name: ETHERPLAYER-v0.1-WINDOWS-x64
+          name: ETHERPLAYER-v0.11-BEHAVIOR-PASS-WINDOWS-x64
           path: dist/ETHERPLAYER.exe
           if-no-files-found: error
