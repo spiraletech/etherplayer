@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(EtherPlayer VERSION 0.13.0 LANGUAGES CXX)
+project(EtherPlayer VERSION 0.13.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,19 +23,20 @@ endif()
 
 if(WIN32)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    set(ETHERPLAYER_WIN013 ${CMAKE_SOURCE_DIR}/generated/EtherPlayerWin013.cpp)
+    set(ETHERPLAYER_WIN0131 ${CMAKE_SOURCE_DIR}/generated/EtherPlayerWin0131.cpp)
     add_custom_command(
-        OUTPUT ${ETHERPLAYER_WIN013}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/make_v013.py
+        OUTPUT ${ETHERPLAYER_WIN0131}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/make_v0131.py
         DEPENDS
             ${CMAKE_SOURCE_DIR}/src/win32/EtherPlayerWin.cpp
             ${CMAKE_SOURCE_DIR}/tools/make_v012.py
             ${CMAKE_SOURCE_DIR}/tools/make_v013.py
+            ${CMAKE_SOURCE_DIR}/tools/make_v0131.py
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Generating EtherPlayer v0.13 Windows shell"
+        COMMENT "Generating EtherPlayer v0.13.1 Windows shell"
         VERBATIM
     )
-    add_executable(EtherPlayer WIN32 ${ETHERPLAYER_WIN013})
+    add_executable(EtherPlayer WIN32 ${ETHERPLAYER_WIN0131})
     target_include_directories(EtherPlayer PRIVATE include)
     target_compile_definitions(EtherPlayer PRIVATE UNICODE _UNICODE NOMINMAX)
     if(MSVC)
