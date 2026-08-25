@@ -44,7 +44,7 @@ rep('constexpr wchar_t kClassName[] = L"ETHERPLAYER_V111_WINDOW";',
 rep('text(g,L"v1.1.1  //  UI POLISH",R(31,48,350,20),11,muted(),FontStyleBold);',
     'text(g,L"v1.1.2  //  FINAL POLISH",R(31,48,350,20),11,muted(),FontStyleBold);')
 rep('g_hwnd=CreateWindowExW(WS_EX_ACCEPTFILES,kClassName,L"ETHERPLAYER v1.1.1 // EtherPlay",WS_OVERLAPPEDWINDOW,',
-    'g_hwnd=CreateWindowExW(WS_EX_ACCEPTFILES,kClassName,L"ETHERPLAYER v1.1.2 // EtherPlay",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,')
+    'g_hwnd=CreateWindowExW(WS_EX_ACCEPTFILES,kClassName,L"ETHERPLAYERv1.0",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,')
 
 # Settings hover should never trigger a full parent repaint. Native edit controls sit above
 # the double-buffered canvas, so passive mouse movement now only updates cursor state there.
@@ -95,6 +95,23 @@ rep('    drawAnalyzer(g,R(252,578,576,46),true);',
     '    drawAnalyzer(g,R(252,610,576,46),true);')
 rep('    text(g,L"LIVE 72-BAND // ETHERPLAY AUDIO BUS",R(252,628,576,14),8,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);',
     '    text(g,L"LIVE 72-BAND // ETHERPLAY AUDIO BUS",R(252,660,576,14),8,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);')
+
+# Windows branding: use resource ID 101 for class, titlebar, Alt-Tab and taskbar icons.
+rep('''    WNDCLASSEXW wc{sizeof(wc)};
+    wc.hInstance=instance;wc.lpfnWndProc=WndProc;wc.lpszClassName=kClassName;
+    wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)GetStockObject(BLACK_BRUSH);''',
+'''    HICON appIcon=(HICON)LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,256,256,LR_DEFAULTCOLOR);
+    HICON appIconSmall=(HICON)LoadImageW(instance,MAKEINTRESOURCEW(101),IMAGE_ICON,32,32,LR_DEFAULTCOLOR);
+    WNDCLASSEXW wc{sizeof(wc)};
+    wc.hInstance=instance;wc.lpfnWndProc=WndProc;wc.lpszClassName=kClassName;
+    wc.hIcon=appIcon;wc.hIconSm=appIconSmall;
+    wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hbrBackground=(HBRUSH)GetStockObject(BLACK_BRUSH);''')
+rep('''    if(!g_hwnd)return 1;
+    DragAcceptFiles(g_hwnd,TRUE);''',
+'''    if(!g_hwnd)return 1;
+    SendMessageW(g_hwnd,WM_SETICON,ICON_BIG,(LPARAM)appIcon);
+    SendMessageW(g_hwnd,WM_SETICON,ICON_SMALL,(LPARAM)appIconSmall);
+    DragAcceptFiles(g_hwnd,TRUE);''')
 
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(s, encoding='utf-8')
