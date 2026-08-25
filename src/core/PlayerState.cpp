@@ -97,9 +97,34 @@ Track trackFromPath(const std::wstring& input) {
     track.artist = L"unknown artist";
 
     const auto meta = readKv(fs::path(track.path + L".ethermeta"));
-    if (const auto it = meta.find("title"); it != meta.end() && !it->second.empty()) track.title = wutf8(it->second);
-    if (const auto it = meta.find("artist"); it != meta.end() && !it->second.empty()) track.artist = wutf8(it->second);
+    auto get = [&](const char* key) -> std::wstring {
+        const auto it = meta.find(key);
+        return it == meta.end() ? L"" : wutf8(it->second);
+    };
+    if (const auto value = get("title"); !value.empty()) track.title = value;
+    if (const auto value = get("artist"); !value.empty()) track.artist = value;
+    track.album = get("album");
+    track.genre = get("genre");
+    track.year = get("year");
+    track.trackNumber = get("track");
+    track.bpm = get("bpm");
+    track.comment = get("comment");
     return track;
+}
+
+bool writeMetadata(const Track& track) {
+    if (track.path.empty()) return false;
+    std::ofstream file(fs::path(track.path + L".ethermeta"), std::ios::binary | std::ios::trunc);
+    if (!file) return false;
+    file << "title=" << utf8(track.title) << '\n'
+         << "artist=" << utf8(track.artist) << '\n'
+         << "album=" << utf8(track.album) << '\n'
+         << "genre=" << utf8(track.genre) << '\n'
+         << "year=" << utf8(track.year) << '\n'
+         << "track=" << utf8(track.trackNumber) << '\n'
+         << "bpm=" << utf8(track.bpm) << '\n'
+         << "comment=" << utf8(track.comment) << '\n';
+    return file.good();
 }
 
 } // namespace
@@ -201,7 +226,7 @@ bool PlayerState::moveQueueItem(std::size_t from, std::size_t to) {
     if (from >= queue_.size() || to >= queue_.size() || from == to) return false;
 
     std::size_t finalIndex = to;
-    if (to > from) --finalIndex; // drop before the hovered row
+    if (to > from) --finalIndex;
 
     const std::size_t value = queue_[from];
     const std::size_t oldCurrent = queueIndex_;
@@ -254,6 +279,28 @@ void PlayerState::clearQueue() {
     queueIndex_ = 0;
 }
 
+bool PlayerState::updateTrackMetadata(std::size_t libraryIndex,
+                                      const std::wstring& title,
+                                      const std::wstring& artist,
+                                      const std::wstring& album,
+                                      const std::wstring& genre,
+                                      const std::wstring& year,
+                                      const std::wstring& trackNumber,
+                                      const std::wstring& bpm,
+                                      const std::wstring& comment) {
+    if (libraryIndex >= library_.size()) return false;
+    Track& track = library_[libraryIndex];
+    track.title = title.empty() ? displayTitleForPath(track.path) : title;
+    track.artist = artist.empty() ? L"unknown artist" : artist;
+    track.album = album;
+    track.genre = genre;
+    track.year = year;
+    track.trackNumber = trackNumber;
+    track.bpm = bpm;
+    track.comment = comment;
+    return writeMetadata(track);
+}
+
 void PlayerState::setScreen(Screen screen) noexcept { screen_ = screen; }
 Screen PlayerState::screen() const noexcept { return screen_; }
 
@@ -270,7 +317,7 @@ void PlayerState::setBrowseSection(BrowseSection section) noexcept {
 BrowseSection PlayerState::browseSection() const noexcept { return browseSection_; }
 
 void PlayerState::browseMove(int delta) noexcept {
-    const std::size_t count = browseSection_ == BrowseSection::Songs ? library_.size() : 6;
+    const std::size_t count = library_.empty() ? 6 : library_.size();
     if (count == 0) {
         browseSelection_ = 0;
         return;
