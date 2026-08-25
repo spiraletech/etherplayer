@@ -63,6 +63,22 @@ replace_function('updateHover', r'''void updateHover(int x,int y) {
 rep('case WM_PAINT:paint(hwnd);return 0;',
     'case WM_ERASEBKGND:return 1;\n        case WM_PAINT:paint(hwnd);return 0;')
 
+# Settings intentionally suppresses the big-screen analyzer timer, but PIP must always animate.
+# This prevents a PIP opened from Settings from inheriting a frozen/lagging frequency display.
+rep('case WM_TIMER:holdStep();if(g_state.screen()!=Screen::Settings)InvalidateRect(hwnd,nullptr,FALSE);return 0;',
+    'case WM_TIMER:holdStep();if(g_state.presentation()==Presentation::Pip || g_state.screen()!=Screen::Settings)InvalidateRect(hwnd,nullptr,FALSE);return 0;')
+
+# Hero top chrome: keep the existing device icons and add a direct Settings gear just left of E.
+rep('''    text(g,L"≡",R(shell.X+22,shell.Y+20,36,28),16,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+    text(g,L"E",R(shell.X+shell.Width/2-18,shell.Y+20,36,28),13,amber(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+    text(g,L"⋮",R(shell.GetRight()-58,shell.Y+20,36,28),18,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);''',
+'''    text(g,L"≡",R(shell.X+22,shell.Y+20,36,28),16,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+    RectF settingsGear=R(shell.X+shell.Width/2-62,shell.Y+20,36,28);
+    text(g,L"⚙",settingsGear,15,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+    addHit(settingsGear,ActSettings);
+    text(g,L"E",R(shell.X+shell.Width/2-18,shell.Y+20,36,28),13,amber(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);
+    text(g,L"⋮",R(shell.GetRight()-58,shell.Y+20,36,28),18,muted(),FontStyleBold,StringAlignmentCenter,StringAlignmentCenter);''')
+
 # Remote: keep the same centered analyzer tuck, just lower it enough to clear QUEUE / SEEK / DOWN.
 rep('    roundRect(g,R(225,558,630,88),18,Color(225,4,4,5),Color(74,104,83,39));',
     '    roundRect(g,R(225,590,630,88),18,Color(225,4,4,5),Color(74,104,83,39));')
