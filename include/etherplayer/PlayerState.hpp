@@ -37,10 +37,13 @@ struct Track {
 class PlayerState {
 public:
     void loadEtherPlayLibrary();
+    void saveEtherPlayLibrary() const;
+    std::size_t addTrackPath(const std::wstring& path);
     void setLibrary(std::vector<Track> tracks);
 
     [[nodiscard]] const std::vector<Track>& library() const noexcept;
     [[nodiscard]] const std::vector<std::size_t>& queue() const noexcept;
+    [[nodiscard]] std::size_t queueIndex() const noexcept;
     [[nodiscard]] const Track* currentTrack() const noexcept;
 
     bool selectLibraryTrack(std::size_t libraryIndex, bool enqueueRest = false);

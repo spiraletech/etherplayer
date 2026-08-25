@@ -1,6 +1,7 @@
 #include "etherplayer/PlayerState.hpp"
 
 #ifdef _WIN32
+#define NOMINMAX
 #include <windows.h>
 #endif
 
@@ -59,13 +60,40 @@ std::map<std::string, std::string> readKv(const fs::path& path) {
     return result;
 }
 
-Track trackFromPath(const std::wstring& input) {
-    Track track;
+std::wstring canonicalPath(const std::wstring& input) {
     std::error_code ec;
     fs::path path = fs::weakly_canonical(fs::path(input), ec);
-    if (ec) path = fs::path(input).lexically_normal();
-    track.path = path.wstring();
-    track.title = path.stem().wstring();
+    if (ec) {
+        ec.clear();
+        path = fs::absolute(fs::path(input), ec);
+        if (ec) path = fs::path(input);
+    }
+    return path.lexically_normal().wstring();
+}
+
+std::wstring pathKey(const std::wstring& input) {
+    std::wstring value = canonicalPath(input);
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return value;
+}
+
+bool supportedAudio(const std::wstring& input) {
+    const std::wstring ext = fs::path(input).extension().wstring();
+#ifdef _WIN32
+    return _wcsicmp(ext.c_str(), L".mp3") == 0 || _wcsicmp(ext.c_str(), L".wav") == 0;
+#else
+    std::wstring lower = ext;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](wchar_t ch){ return static_cast<wchar_t>(std::towlower(ch)); });
+    return lower == L".mp3" || lower == L".wav";
+#endif
+}
+
+Track trackFromPath(const std::wstring& input) {
+    Track track;
+    track.path = canonicalPath(input);
+    track.title = fs::path(track.path).stem().wstring();
     track.artist = L"unknown artist";
 
     const auto meta = readKv(fs::path(track.path + L".ethermeta"));
@@ -99,9 +127,40 @@ void PlayerState::loadEtherPlayLibrary() {
         if (line.empty()) continue;
         Track track = trackFromPath(wutf8(line));
         std::error_code ec;
-        if (!track.path.empty() && fs::exists(track.path, ec)) tracks.push_back(std::move(track));
+        if (!track.path.empty() && supportedAudio(track.path) && fs::exists(track.path, ec)) {
+            const auto key = pathKey(track.path);
+            const bool duplicate = std::any_of(tracks.begin(), tracks.end(), [&](const Track& item){ return pathKey(item.path) == key; });
+            if (!duplicate) tracks.push_back(std::move(track));
+        }
     }
     setLibrary(std::move(tracks));
+}
+
+void PlayerState::saveEtherPlayLibrary() const {
+    const fs::path dir = etherPlayProfileDir();
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    std::ofstream file(dir / L"library.txt", std::ios::binary | std::ios::trunc);
+    if (!file) return;
+    for (const auto& track : library_) file << utf8(track.path) << '\n';
+}
+
+std::size_t PlayerState::addTrackPath(const std::wstring& input) {
+    if (!supportedAudio(input)) return static_cast<std::size_t>(-1);
+    Track track = trackFromPath(input);
+    std::error_code ec;
+    if (track.path.empty() || !fs::exists(track.path, ec)) return static_cast<std::size_t>(-1);
+    const auto key = pathKey(track.path);
+    for (std::size_t i = 0; i < library_.size(); ++i) {
+        if (pathKey(library_[i].path) == key) {
+            library_[i] = std::move(track);
+            saveEtherPlayLibrary();
+            return i;
+        }
+    }
+    library_.push_back(std::move(track));
+    saveEtherPlayLibrary();
+    return library_.size() - 1;
 }
 
 void PlayerState::setLibrary(std::vector<Track> tracks) {
@@ -113,6 +172,7 @@ void PlayerState::setLibrary(std::vector<Track> tracks) {
 
 const std::vector<Track>& PlayerState::library() const noexcept { return library_; }
 const std::vector<std::size_t>& PlayerState::queue() const noexcept { return queue_; }
+std::size_t PlayerState::queueIndex() const noexcept { return queueIndex_; }
 
 const Track* PlayerState::currentTrack() const noexcept {
     if (queue_.empty() || queueIndex_ >= queue_.size()) return nullptr;
@@ -156,7 +216,8 @@ void PlayerState::playNext(std::size_t libraryIndex) {
         queueIndex_ = 0;
         return;
     }
-    queue_.insert(queue_.begin() + static_cast<std::ptrdiff_t>(std::min(queueIndex_ + 1, queue_.size())), libraryIndex);
+    const auto insertAt = queue_.begin() + static_cast<std::ptrdiff_t>(std::min(queueIndex_ + 1, queue_.size()));
+    queue_.insert(insertAt, libraryIndex);
 }
 
 void PlayerState::addToQueue(std::size_t libraryIndex) {
