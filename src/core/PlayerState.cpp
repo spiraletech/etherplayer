@@ -197,6 +197,31 @@ bool PlayerState::playQueueIndex(std::size_t queueIndex) {
     return true;
 }
 
+bool PlayerState::moveQueueItem(std::size_t from, std::size_t to) {
+    if (from >= queue_.size() || to >= queue_.size() || from == to) return false;
+
+    std::size_t finalIndex = to;
+    if (to > from) --finalIndex; // drop before the hovered row
+
+    const std::size_t value = queue_[from];
+    const std::size_t oldCurrent = queueIndex_;
+    queue_.erase(queue_.begin() + static_cast<std::ptrdiff_t>(from));
+    finalIndex = std::min(finalIndex, queue_.size());
+    queue_.insert(queue_.begin() + static_cast<std::ptrdiff_t>(finalIndex), value);
+
+    if (oldCurrent == from) {
+        queueIndex_ = finalIndex;
+    } else if (from < oldCurrent && finalIndex >= oldCurrent) {
+        queueIndex_ = oldCurrent - 1;
+    } else if (from > oldCurrent && finalIndex <= oldCurrent) {
+        queueIndex_ = oldCurrent + 1;
+    } else {
+        queueIndex_ = oldCurrent;
+    }
+    if (!queue_.empty()) queueIndex_ = std::min(queueIndex_, queue_.size() - 1);
+    return true;
+}
+
 bool PlayerState::next() {
     if (queueIndex_ + 1 >= queue_.size()) return false;
     ++queueIndex_;
