@@ -12,6 +12,10 @@ targets:
     platform: iOS
     sources:
       - path: EtherPlayer
+    preBuildScripts:
+      - name: Generate EtherPlayer app icons
+        script: |
+          /bin/bash "$SRCROOT/tools/make_icons.sh"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ethertech.etherplayer
