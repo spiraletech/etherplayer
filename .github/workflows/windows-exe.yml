@@ -20,10 +20,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item build/Release/ETHERPLAYER.exe dist/ETHERPLAYER.exe
+          Copy-Item build/Release/ETHERPLAYERv1.0.exe dist/ETHERPLAYERv1.0.exe
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
-          name: ETHERPLAYER-v1.1.1-UI-POLISH-WINDOWS-x64
-          path: dist/ETHERPLAYER.exe
+          name: ETHERPLAYERv1.0-WINDOWS-x64
+          path: dist/ETHERPLAYERv1.0.exe
           if-no-files-found: error
