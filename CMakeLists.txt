@@ -11,6 +11,10 @@ add_library(etherplayer_core
 target_include_directories(etherplayer_core PUBLIC include)
 target_compile_definitions(etherplayer_core PUBLIC ETHERPLAYER_VERSION="${PROJECT_VERSION}")
 
+if(WIN32)
+    target_compile_definitions(etherplayer_core PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
+endif()
+
 if(MSVC)
     target_compile_options(etherplayer_core PRIVATE /W4 /permissive- /utf-8)
 else()
