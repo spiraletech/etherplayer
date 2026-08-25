@@ -1,0 +1,42 @@
+name: EtherPlayer iOS Simulator
+
+on:
+  push:
+    branches: [ main, feature/ios-v0.1 ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate app icons
+        run: bash ios/tools/make_icons.sh
+      - name: Generate Xcode project
+        run: cd ios && xcodegen generate
+      - name: Build iOS Simulator app
+        run: |
+          xcodebuild \
+            -project ios/EtherPlayer.xcodeproj \
+            -scheme EtherPlayer \
+            -sdk iphonesimulator \
+            -configuration Release \
+            -derivedDataPath ios/build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Package simulator app
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            ios/build/Build/Products/Release-iphonesimulator/EtherPlayer.app \
+            dist/EtherPlayer-iOS-v0.1-Simulator.zip
+      - name: Upload iOS simulator build
+        uses: actions/upload-artifact@v4
+        with:
+          name: EtherPlayer-iOS-v0.1-Simulator
+          path: dist/EtherPlayer-iOS-v0.1-Simulator.zip
+          if-no-files-found: error
