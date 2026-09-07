@@ -44,7 +44,6 @@ rep('constexpr wchar_t kClassName[] = L"ETHERPLAYER_V112_WINDOW";',
 rep('text(g,L"v1.1.2  //  FINAL POLISH",R(31,48,350,20),11,muted(),FontStyleBold);',
     'text(g,L"v1.1.3  //  COVER ART PATCH",R(31,48,370,20),11,muted(),FontStyleBold);')
 
-# Add a dedicated Song Settings action for artwork selection.
 rep('''    ActSettingsPrev,
     ActSettingsNext,
     ActBrowseMenuBase = 1000,''', '''    ActSettingsPrev,
@@ -52,10 +51,11 @@ rep('''    ActSettingsPrev,
     ActSettingsArtwork,
     ActBrowseMenuBase = 1000,''')
 
-# Persist artwork using EtherPlayer's existing .ethercover contract. The current reader accepts
-# image=<utf8 path>, so Windows and iOS can both keep artwork external/non-destructive.
 anchor = 'std::wstring readCoverSidecar(const std::wstring& track) {'
-helper = r'''std::string utf8FromWide(const std::wstring& value) {
+helper = r'''std::wstring readCoverSidecar(const std::wstring& track);
+void refreshCover();
+
+std::string utf8FromWide(const std::wstring& value) {
     if(value.empty())return {};
     const int n=WideCharToMultiByte(CP_UTF8,0,value.data(),(int)value.size(),nullptr,0,nullptr,nullptr);
     if(n<=0)return {};
@@ -124,7 +124,6 @@ void chooseArtworkForMetaTrack() {
 ''' + anchor
 rep(anchor, helper)
 
-# Song Settings now shows the selected cover and an explicit artwork picker beside metadata.
 replace_function('drawSettings', r'''void drawSettings(Graphics& g) {
     ensureMetaControls();
     text(g,L"settings",R(62,88,360,58),48,warmWhite(),FontStyleBold);
