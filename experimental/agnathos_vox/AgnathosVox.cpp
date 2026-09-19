@@ -27,7 +27,18 @@ constexpr int kBufferCount = 4;
 constexpr int kRingSize = 16384;
 constexpr int kFftSize = 2048;
 constexpr int kBars = 72;
+constexpr int kAnchors = 11;
 constexpr UINT_PTR kTimerId = 1;
+
+constexpr std::array<float, kAnchors> kAnchorHz{
+    174.0f, 285.0f, 288.0f, 384.0f, 396.0f, 417.0f,
+    528.0f, 639.0f, 741.0f, 852.0f, 963.0f
+};
+
+constexpr std::array<const wchar_t*, kAnchors> kAnchorNames{
+    L"174", L"285", L"288", L"384", L"396", L"417",
+    L"528", L"639", L"741", L"852", L"963"
+};
 
 struct Color {
     int r = 0, g = 0, b = 0;
@@ -196,7 +207,12 @@ struct Analysis {
     float pitchHz = 0.0f;
     float edge = 0.0f;
     float air = 0.0f;
+    float centroidHz = 0.0f;
+    float lowEnergy = 0.0f;
+    float midEnergy = 0.0f;
+    float highEnergy = 0.0f;
     std::array<float, kBars> bars{};
+    std::array<float, kAnchors> anchors{};
 };
 
 static void fft(std::array<std::complex<float>, kFftSize>& a) {
@@ -221,6 +237,45 @@ static void fft(std::array<std::complex<float>, kFftSize>& a) {
             }
         }
     }
+}
+
+static float goertzelMagnitude(const std::array<float, kFftSize>& input, float hz) {
+    if (hz <= 20.0f || hz >= kSampleRate * 0.48f) return 0.0f;
+    const float omega = 2.0f * 3.14159265358979323846f * hz / kSampleRate;
+    const float coeff = 2.0f * std::cos(omega);
+    float s0 = 0.0f, s1 = 0.0f, s2 = 0.0f;
+
+    for (int i = 0; i < kFftSize; ++i) {
+        const float window = 0.5f - 0.5f * std::cos(
+            2.0f * 3.14159265358979323846f * i / (kFftSize - 1)
+        );
+        s0 = input[i] * window + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+
+    const float power = std::max(0.0f, s1 * s1 + s2 * s2 - coeff * s1 * s2);
+    return 2.0f * std::sqrt(power) / kFftSize;
+}
+
+static float anchorFamilyStrength(const std::array<float, kFftSize>& input, float targetHz, float rms) {
+    if (rms < 0.004f) return 0.0f;
+
+    auto bestNear = [&](float hz) {
+        float best = 0.0f;
+        for (float drift : {0.985f, 1.0f, 1.015f}) {
+            best = std::max(best, goertzelMagnitude(input, hz * drift));
+        }
+        return best;
+    };
+
+    float direct = bestNear(targetHz);
+    float sub = targetHz * 0.5f >= 55.0f ? bestNear(targetHz * 0.5f) * 0.72f : 0.0f;
+    float harmonic = targetHz * 2.0f < 6000.0f ? bestNear(targetHz * 2.0f) * 0.60f : 0.0f;
+    float mag = std::max(direct, std::max(sub, harmonic));
+
+    const float ratio = mag / (rms + 1e-5f);
+    return std::clamp((ratio - 0.06f) / 0.90f, 0.0f, 1.0f);
 }
 
 static float estimatePitch(const std::array<float, kFftSize>& x, float rms) {
@@ -289,16 +344,30 @@ static Analysis analyze(const std::array<float, kFftSize>& input) {
     double total = 0.0;
     double high = 0.0;
     double air = 0.0;
+    double lowBand = 0.0;
+    double midBand = 0.0;
+    double highBand = 0.0;
+    double weightedHz = 0.0;
     for (int k = 1; k < kFftSize / 2; ++k) {
         const float hz = static_cast<float>(k) * kSampleRate / kFftSize;
         const float m = magAt(k);
-        if (hz >= 90.0f && hz <= 10000.0f) total += m;
+        if (hz >= 55.0f && hz <= 10000.0f) {
+            total += m;
+            weightedHz += hz * m;
+        }
+        if (hz >= 55.0f && hz < 250.0f) lowBand += m;
+        if (hz >= 250.0f && hz < 2000.0f) midBand += m;
+        if (hz >= 2000.0f && hz <= 10000.0f) highBand += m;
         if (hz >= 1800.0f && hz <= 7000.0f) high += m;
         if (hz >= 5000.0f && hz <= 10000.0f) air += m;
     }
 
     const float highRatio = total > 0.0 ? static_cast<float>(high / total) : 0.0f;
     const float airRatio = total > 0.0 ? static_cast<float>(air / total) : 0.0f;
+    out.centroidHz = total > 0.0 ? static_cast<float>(weightedHz / total) : 0.0f;
+    out.lowEnergy = total > 0.0 ? static_cast<float>(lowBand / total) : 0.0f;
+    out.midEnergy = total > 0.0 ? static_cast<float>(midBand / total) : 0.0f;
+    out.highEnergy = total > 0.0 ? static_cast<float>(highBand / total) : 0.0f;
     const float zcr = static_cast<float>(crossings) / kFftSize;
 
     out.edge = std::clamp((highRatio - 0.18f) * 2.7f + (zcr - 0.06f) * 2.0f, 0.0f, 1.0f);
@@ -317,6 +386,10 @@ static Analysis analyze(const std::array<float, kFftSize>& input) {
         for (int k = k0; k <= k1; ++k) peak = std::max(peak, magAt(k));
         float db = 20.0f * std::log10(peak + 1e-6f);
         out.bars[b] = std::clamp((db + 70.0f) / 55.0f, 0.0f, 1.0f);
+    }
+
+    for (int i = 0; i < kAnchors; ++i) {
+        out.anchors[i] = anchorFamilyStrength(input, kAnchorHz[i], out.rms);
     }
 
     return out;
@@ -445,9 +518,101 @@ static Color weatherBandColor(const WeatherPalette& p, float ft) {
     return mix(p.mid, p.high, (ft - 0.52f) / 0.48f);
 }
 
+struct ChameleonState {
+    float hue = 262.0f;
+    float saturation = 0.74f;
+    float value = 0.72f;
+    float memoryLow = 0.0f;
+    float memoryMid = 0.0f;
+    float memoryHigh = 0.0f;
+    float memoryEdge = 0.0f;
+    float memoryAir = 0.0f;
+    float memoryIntensity = 0.0f;
+    float memoryCentroid = 0.0f;
+    float anchorInfluence = 0.0f;
+    int activeAnchor = -1;
+};
+
+static float hueDistance(float from, float to) {
+    float d = std::fmod(to - from + 540.0f, 360.0f) - 180.0f;
+    return d;
+}
+
+static float approachHue(float current, float target, float amount) {
+    current += hueDistance(current, target) * std::clamp(amount, 0.0f, 1.0f);
+    if (current < 0.0f) current += 360.0f;
+    if (current >= 360.0f) current -= 360.0f;
+    return current;
+}
+
+static float circularTargetHue(const Analysis& a, const std::array<float, kAnchors>& anchors) {
+    float x = 0.0f;
+    float y = 0.0f;
+    float weight = 0.0f;
+
+    auto addHue = [&](float hue, float w) {
+        const float rad = hue * 3.14159265358979323846f / 180.0f;
+        x += std::cos(rad) * w;
+        y += std::sin(rad) * w;
+        weight += w;
+    };
+
+    const float intensity = std::clamp(a.rms * 8.0f, 0.0f, 1.0f);
+    const float centroidNorm = std::clamp(
+        (std::log2(std::max(a.centroidHz, 180.0f)) - std::log2(180.0f)) /
+        (std::log2(7000.0f) - std::log2(180.0f)), 0.0f, 1.0f
+    );
+
+    if (a.pitchHz > 0.0f) {
+        const float pitchNorm = std::clamp(
+            (std::log2(a.pitchHz) - std::log2(75.0f)) /
+            (std::log2(520.0f) - std::log2(75.0f)), 0.0f, 1.0f
+        );
+        addHue(250.0f + pitchNorm * 165.0f, 1.10f);
+    }
+
+    addHue(286.0f, a.lowEnergy * 1.7f);
+    addHue(205.0f, a.midEnergy * 1.25f);
+    addHue(44.0f, a.highEnergy * 1.10f);
+    addHue(8.0f, a.edge * 0.95f);
+    addHue(188.0f, a.air * 0.90f);
+    addHue(40.0f + centroidNorm * 220.0f, 0.58f + intensity * 0.28f);
+
+    for (int i = 0; i < kAnchors; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kAnchors - 1);
+        const float anchorHue = std::fmod(330.0f * t + 18.0f, 360.0f);
+        addHue(anchorHue, anchors[i] * 0.95f);
+    }
+
+    if (weight <= 0.0001f) return 262.0f;
+    float hue = std::atan2(y, x) * 180.0f / 3.14159265358979323846f;
+    if (hue < 0.0f) hue += 360.0f;
+    return hue;
+}
+
+static Color chameleonColor(const ChameleonState& c, float localFrequencyT, float activity) {
+    const float spread = (localFrequencyT - 0.5f) * 94.0f;
+    const float hue = c.hue + spread;
+    const float sat = std::clamp(c.saturation + activity * 0.10f, 0.0f, 1.0f);
+    const float val = std::clamp(c.value * (0.58f + activity * 0.68f), 0.0f, 1.0f);
+    return hsv(hue, sat, val);
+}
+
+static int logBarIndexForHz(float hz) {
+    const float minF = 45.0f;
+    const float maxF = 12000.0f;
+    const float t = std::clamp(
+        std::log(hz / minF) / std::log(maxF / minF),
+        0.0f, 1.0f
+    );
+    return std::clamp(static_cast<int>(std::lround(t * (kBars - 1))), 0, kBars - 1);
+}
+
 AudioCapture gAudio;
 Analysis gAnalysis{};
 std::array<float, kBars> gSmoothBars{};
+std::array<float, kAnchors> gAnchorSmooth{};
+ChameleonState gChameleon{};
 bool gMicOk = false;
 bool gFrozen = false;
 VisualMode gVisualMode = VisualMode::Weather;
@@ -489,8 +654,9 @@ void paintScene(HWND hwnd, HDC target) {
     const WeatherPalette weather = weatherPalette(gWeather);
     Color background{7, 7, 10};
     if (gVisualMode == VisualMode::Weather) {
-        background = mix(background, weather.sky, 0.52f);
-        background = mix(background, Color{255,255,255}, gFlash * 0.10f);
+        const Color climate = hsv(gChameleon.hue, gChameleon.saturation * 0.62f, 0.23f + gChameleon.value * 0.12f);
+        background = mix(background, climate, 0.64f);
+        background = mix(background, Color{255,255,255}, gFlash * 0.09f);
     }
     HBRUSH bg = CreateSolidBrush(cref(background));
     FillRect(dc, &rc, bg);
@@ -501,7 +667,7 @@ void paintScene(HWND hwnd, HDC target) {
             ? spectrumFromPitch(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms)
             : gVisualMode == VisualMode::Agnathos
                 ? paletteFromVoice(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms)
-                : mix(weather.mid, weather.high, std::clamp(gAnalysis.air * 0.55f + gAnalysis.rms * 1.8f, 0.0f, 1.0f));
+                : hsv(gChameleon.hue, gChameleon.saturation, gChameleon.value);
     const Color burgundy{92, 18, 52};
     const Color violet{122, 58, 188};
     const Color cyan{63, 188, 211};
@@ -510,7 +676,7 @@ void paintScene(HWND hwnd, HDC target) {
 
     drawTextSimple(dc, L"AGNATHOS / VOX", 28, 18, 250, 34, 20, FW_SEMIBOLD, RGB(225,225,230));
     std::wstring modeLabel;
-    if (gVisualMode == VisualMode::Weather) modeLabel = std::wstring(L"WEATHER / ") + weather.name;
+    if (gVisualMode == VisualMode::Weather) modeLabel = std::wstring(L"CHAMELEON / ") + weather.name;
     else if (gVisualMode == VisualMode::Spectrum) modeLabel = L"SPECTRUM";
     else modeLabel = L"AGNATHOS";
     drawTextSimple(dc, modeLabel, 260, 18, 280, 34, 12, FW_SEMIBOLD, cref(current));
@@ -526,17 +692,24 @@ void paintScene(HWND hwnd, HDC target) {
     drawTextSimple(dc, big, 28, 66, W - 56, 72, 48, FW_LIGHT, cref(current));
     drawTextSimple(dc, noteName(gAnalysis.pitchHz), 32, 130, 150, 38, 22, FW_SEMIBOLD, RGB(178,180,188));
 
+    if (gChameleon.activeAnchor >= 0 && gChameleon.anchorInfluence > 0.10f) {
+        std::wstring anchorText = std::wstring(L"ANCHOR FAMILY  ") +
+            kAnchorNames[gChameleon.activeAnchor] + L" Hz";
+        drawTextSimple(dc, anchorText, 178, 132, 290, 34, 13, FW_SEMIBOLD,
+                       cref(hsv(gChameleon.hue + 34.0f, 0.72f, 0.92f)));
+    }
+
     const int swY = 182;
     const int swH = 24;
     const int swW = std::max(50, (W - 56) / 5);
     std::array<Color,5> swatches{};
     if (gVisualMode == VisualMode::Weather) {
         swatches = {
-            scale(weather.low, 0.78f),
-            weather.low,
-            weather.mid,
-            weather.high,
-            mix(weather.high, Color{255,255,255}, 0.42f)
+            hsv(gChameleon.hue - 58.0f, gChameleon.saturation * 0.88f, gChameleon.value * 0.66f),
+            hsv(gChameleon.hue - 26.0f, gChameleon.saturation, gChameleon.value * 0.82f),
+            hsv(gChameleon.hue, gChameleon.saturation, gChameleon.value),
+            hsv(gChameleon.hue + 34.0f, std::min(1.0f, gChameleon.saturation + 0.08f), std::min(1.0f, gChameleon.value + 0.10f)),
+            hsv(gChameleon.hue + 72.0f, gChameleon.saturation * 0.68f, std::min(1.0f, gChameleon.value + 0.18f))
         };
     } else if (gVisualMode == VisualMode::Spectrum) {
         swatches = {
@@ -581,7 +754,17 @@ void paintScene(HWND hwnd, HDC target) {
     const float bw = totalW / kBars;
 
     for (int i = 0; i < kBars; ++i) {
-        const float v = std::clamp(gSmoothBars[i], 0.0f, 1.0f);
+        float v = std::clamp(gSmoothBars[i], 0.0f, 1.0f);
+        if (gVisualMode == VisualMode::Weather) {
+            for (int a = 0; a < kAnchors; ++a) {
+                const int anchorBar = logBarIndexForHz(kAnchorHz[a]);
+                const int distance = std::abs(i - anchorBar);
+                if (distance <= 1) {
+                    const float bump = gAnchorSmooth[a] * (distance == 0 ? 0.86f : 0.34f);
+                    v = std::max(v, bump);
+                }
+            }
+        }
         const int bh = static_cast<int>(v * usableH);
         const int x0 = 28 + static_cast<int>(i * bw);
         const int x1 = 28 + static_cast<int>((i + 1) * bw) - gap;
@@ -589,13 +772,28 @@ void paintScene(HWND hwnd, HDC target) {
 
         Color barColor;
         if (gVisualMode == VisualMode::Weather) {
-            const Color frequencyShape = spectrumColor(ft, 1.0f);
-            const Color climate = weatherBandColor(weather, ft);
-            const float weatherPull = 0.62f + std::clamp(gAnalysis.rms * 2.4f + gAnalysis.edge * 0.18f, 0.0f, 0.28f);
-            barColor = mix(frequencyShape, climate, weatherPull);
+            float anchorGlow = 0.0f;
+            Color anchorColor = chameleonColor(gChameleon, ft, v);
+
+            for (int a = 0; a < kAnchors; ++a) {
+                const int anchorBar = logBarIndexForHz(kAnchorHz[a]);
+                const int distance = std::abs(i - anchorBar);
+                if (distance <= 2) {
+                    const float falloff = distance == 0 ? 1.0f : (distance == 1 ? 0.48f : 0.18f);
+                    const float pull = gAnchorSmooth[a] * falloff;
+                    if (pull > anchorGlow) {
+                        anchorGlow = pull;
+                        const float anchorT = static_cast<float>(a) / static_cast<float>(kAnchors - 1);
+                        anchorColor = hsv(18.0f + anchorT * 330.0f, 0.92f, 1.0f);
+                    }
+                }
+            }
+
+            barColor = chameleonColor(gChameleon, ft, v);
+            barColor = mix(barColor, anchorColor, std::clamp(anchorGlow * 0.72f, 0.0f, 0.72f));
 
             // Sudden vocal/beat attacks read as a brief white "lightning" edge.
-            const float flashPull = gFlash * (0.20f + ft * 0.42f) * v;
+            const float flashPull = gFlash * (0.16f + ft * 0.34f) * v;
             barColor = mix(barColor, Color{245, 248, 255}, flashPull);
         } else if (gVisualMode == VisualMode::Spectrum) {
             barColor = spectrumColor(ft, 1.0f);
@@ -615,7 +813,7 @@ void paintScene(HWND hwnd, HDC target) {
         DeleteObject(br);
     }
 
-    std::wstring foot = L"DEFAULT MICROPHONE   \u2022   TAB WEATHER / SPECTRUM / AGNATHOS   \u2022   SPACE FREEZE   \u2022   ESC QUIT";
+    std::wstring foot = L"DEFAULT MICROPHONE   \u2022   TAB CHAMELEON / SPECTRUM / AGNATHOS   \u2022   SPACE FREEZE   \u2022   ESC QUIT";
     drawTextSimple(dc, foot, 28, H - 42, W - 56, 26, 12, FW_NORMAL, RGB(116,118,126));
 
     BitBlt(target, 0, 0, W, H, dc, 0, 0, SRCCOPY);
@@ -644,6 +842,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 gAnalysis.edge = gAnalysis.edge * 0.72f + next.edge * 0.28f;
                 gAnalysis.air = gAnalysis.air * 0.72f + next.air * 0.28f;
+                gAnalysis.centroidHz = gAnalysis.centroidHz * 0.82f + next.centroidHz * 0.18f;
+                gAnalysis.lowEnergy = gAnalysis.lowEnergy * 0.82f + next.lowEnergy * 0.18f;
+                gAnalysis.midEnergy = gAnalysis.midEnergy * 0.82f + next.midEnergy * 0.18f;
+                gAnalysis.highEnergy = gAnalysis.highEnergy * 0.82f + next.highEnergy * 0.18f;
                 for (int i = 0; i < kBars; ++i) {
                     const float fall = 0.035f;
                     if (next.bars[i] > gSmoothBars[i]) gSmoothBars[i] = gSmoothBars[i] * 0.55f + next.bars[i] * 0.45f;
@@ -654,13 +856,58 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 gFlash = std::max(gFlash * 0.84f, std::clamp(attack * 18.0f, 0.0f, 1.0f));
                 gPreviousRms = gAnalysis.rms;
 
+                for (int i = 0; i < kAnchors; ++i) {
+                    const float attackAlpha = next.anchors[i] > gAnchorSmooth[i] ? 0.28f : 0.055f;
+                    gAnchorSmooth[i] += (next.anchors[i] - gAnchorSmooth[i]) * attackAlpha;
+                }
+
+                int strongestAnchor = -1;
+                float strongestValue = 0.0f;
+                for (int i = 0; i < kAnchors; ++i) {
+                    if (gAnchorSmooth[i] > strongestValue) {
+                        strongestValue = gAnchorSmooth[i];
+                        strongestAnchor = i;
+                    }
+                }
+                gChameleon.activeAnchor = strongestValue > 0.10f ? strongestAnchor : -1;
+                gChameleon.anchorInfluence += (strongestValue - gChameleon.anchorInfluence) * 0.045f;
+
+                // Long-ish memory: the climate remembers the previous phrase instead of repainting every frame.
+                constexpr float memoryAlpha = 0.016f;
+                gChameleon.memoryLow += (gAnalysis.lowEnergy - gChameleon.memoryLow) * memoryAlpha;
+                gChameleon.memoryMid += (gAnalysis.midEnergy - gChameleon.memoryMid) * memoryAlpha;
+                gChameleon.memoryHigh += (gAnalysis.highEnergy - gChameleon.memoryHigh) * memoryAlpha;
+                gChameleon.memoryEdge += (gAnalysis.edge - gChameleon.memoryEdge) * memoryAlpha;
+                gChameleon.memoryAir += (gAnalysis.air - gChameleon.memoryAir) * memoryAlpha;
+                const float intensity = std::clamp(gAnalysis.rms * 8.0f, 0.0f, 1.0f);
+                gChameleon.memoryIntensity += (intensity - gChameleon.memoryIntensity) * memoryAlpha;
+                gChameleon.memoryCentroid += (gAnalysis.centroidHz - gChameleon.memoryCentroid) * memoryAlpha;
+
+                const float targetHue = circularTargetHue(gAnalysis, gAnchorSmooth);
+                gChameleon.hue = approachHue(gChameleon.hue, targetHue, 0.045f);
+                const float targetSat = std::clamp(
+                    0.48f + gChameleon.memoryEdge * 0.22f +
+                    gChameleon.anchorInfluence * 0.20f +
+                    std::fabs(gChameleon.memoryHigh - gChameleon.memoryLow) * 0.22f,
+                    0.42f, 0.98f
+                );
+                const float targetValue = std::clamp(
+                    0.42f + gChameleon.memoryIntensity * 0.38f +
+                    gChameleon.memoryAir * 0.16f +
+                    gChameleon.anchorInfluence * 0.10f,
+                    0.38f, 1.0f
+                );
+                gChameleon.saturation += (targetSat - gChameleon.saturation) * 0.030f;
+                gChameleon.value += (targetValue - gChameleon.value) * 0.040f;
+
+                // Weather is now only a descriptive label for the continuous chameleon field.
                 const WeatherKind candidate = chooseWeather(gAnalysis, gSmoothBars);
                 if (candidate == gWeather) {
                     gWeatherCandidate = candidate;
                     gWeatherCandidateFrames = 0;
                 } else if (candidate == gWeatherCandidate) {
                     ++gWeatherCandidateFrames;
-                    if (gWeatherCandidateFrames >= 10) {
+                    if (gWeatherCandidateFrames >= 18) {
                         gWeather = candidate;
                         gWeatherCandidateFrames = 0;
                     }
