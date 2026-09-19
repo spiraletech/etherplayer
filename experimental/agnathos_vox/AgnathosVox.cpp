@@ -54,6 +54,50 @@ static COLORREF cref(Color c) {
     return RGB(std::clamp(c.r,0,255), std::clamp(c.g,0,255), std::clamp(c.b,0,255));
 }
 
+static Color hsv(float hueDeg, float saturation, float value) {
+    hueDeg = std::fmod(hueDeg, 360.0f);
+    if (hueDeg < 0.0f) hueDeg += 360.0f;
+    saturation = std::clamp(saturation, 0.0f, 1.0f);
+    value = std::clamp(value, 0.0f, 1.0f);
+
+    const float c = value * saturation;
+    const float x = c * (1.0f - std::fabs(std::fmod(hueDeg / 60.0f, 2.0f) - 1.0f));
+    const float m = value - c;
+
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    if (hueDeg < 60.0f)       { r = c; g = x; }
+    else if (hueDeg < 120.0f) { r = x; g = c; }
+    else if (hueDeg < 180.0f) { g = c; b = x; }
+    else if (hueDeg < 240.0f) { g = x; b = c; }
+    else if (hueDeg < 300.0f) { r = x; b = c; }
+    else                       { r = c; b = x; }
+
+    return {
+        static_cast<int>((r + m) * 255.0f),
+        static_cast<int>((g + m) * 255.0f),
+        static_cast<int>((b + m) * 255.0f)
+    };
+}
+
+static Color spectrumColor(float t, float brightness = 1.0f) {
+    // Low -> high: red, orange, yellow, green, cyan, blue, violet, magenta.
+    t = std::clamp(t, 0.0f, 1.0f);
+    return hsv(330.0f * t, 0.90f, std::clamp(brightness, 0.0f, 1.0f));
+}
+
+static Color spectrumFromPitch(float pitch, float edge, float air, float rms) {
+    float t = 0.58f;
+    if (pitch > 0.0f) {
+        const float lo = std::log2(75.0f);
+        const float hi = std::log2(520.0f);
+        t = std::clamp((std::log2(pitch) - lo) / (hi - lo), 0.0f, 1.0f);
+    }
+    Color c = spectrumColor(t, 0.70f + std::clamp(rms * 5.0f, 0.0f, 0.30f));
+    c = mix(c, Color{255, 255, 255}, air * 0.25f);
+    c = mix(c, Color{255, 70, 38}, edge * 0.12f);
+    return c;
+}
+
 struct AudioCapture {
     struct Buffer {
         WAVEHDR hdr{};
@@ -317,6 +361,7 @@ Analysis gAnalysis{};
 std::array<float, kBars> gSmoothBars{};
 bool gMicOk = false;
 bool gFrozen = false;
+bool gSpectrumMode = true;
 
 HFONT makeFont(int px, int weight) {
     return CreateFontW(
@@ -351,14 +396,17 @@ void paintScene(HWND hwnd, HDC target) {
     FillRect(dc, &rc, bg);
     DeleteObject(bg);
 
-    const Color current = paletteFromVoice(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms);
+    const Color current = gSpectrumMode
+        ? spectrumFromPitch(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms)
+        : paletteFromVoice(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms);
     const Color burgundy{92, 18, 52};
     const Color violet{122, 58, 188};
     const Color cyan{63, 188, 211};
     const Color silver{211, 222, 230};
     const Color rust{212, 72, 42};
 
-    drawTextSimple(dc, L"AGNATHOS / VOX", 28, 18, 360, 34, 20, FW_SEMIBOLD, RGB(225,225,230));
+    drawTextSimple(dc, L"AGNATHOS / VOX", 28, 18, 250, 34, 20, FW_SEMIBOLD, RGB(225,225,230));
+    drawTextSimple(dc, gSpectrumMode ? L"SPECTRUM" : L"AGNATHOS", 260, 18, 180, 34, 12, FW_SEMIBOLD, cref(current));
     drawTextSimple(dc, gMicOk ? (gFrozen ? L"FROZEN" : L"LIVE INPUT") : L"MIC OFFLINE",
                    W - 220, 18, 190, 34, 14, FW_SEMIBOLD,
                    gMicOk ? RGB(165,170,178) : RGB(225,85,72),
@@ -374,13 +422,24 @@ void paintScene(HWND hwnd, HDC target) {
     const int swY = 182;
     const int swH = 24;
     const int swW = std::max(50, (W - 56) / 5);
-    std::array<Color,5> swatches{
-        scale(current, 0.58f),
-        current,
-        mix(current, cyan, 0.45f + gAnalysis.air * 0.35f),
-        mix(current, rust, 0.45f + gAnalysis.edge * 0.45f),
-        mix(current, silver, 0.65f)
-    };
+    std::array<Color,5> swatches{};
+    if (gSpectrumMode) {
+        swatches = {
+            spectrumColor(0.00f, 0.85f),
+            spectrumColor(0.25f, 0.90f),
+            spectrumColor(0.50f, 0.95f),
+            spectrumColor(0.75f, 1.00f),
+            spectrumColor(1.00f, 1.00f)
+        };
+    } else {
+        swatches = {
+            scale(current, 0.58f),
+            current,
+            mix(current, cyan, 0.45f + gAnalysis.air * 0.35f),
+            mix(current, rust, 0.45f + gAnalysis.edge * 0.45f),
+            mix(current, silver, 0.65f)
+        };
+    }
     for (int i = 0; i < 5; ++i) {
         RECT s{28 + i * swW, swY, 28 + (i + 1) * swW - 4, swY + swH};
         HBRUSH br = CreateSolidBrush(cref(swatches[i]));
@@ -414,9 +473,16 @@ void paintScene(HWND hwnd, HDC target) {
         const float ft = static_cast<float>(i) / (kBars - 1);
 
         Color barColor;
-        if (ft < 0.45f) barColor = mix(burgundy, current, ft / 0.45f);
-        else if (ft < 0.75f) barColor = mix(current, violet, (ft - 0.45f) / 0.30f * 0.35f);
-        else barColor = mix(current, cyan, (ft - 0.75f) / 0.25f * 0.62f);
+        if (gSpectrumMode) {
+            barColor = spectrumColor(ft, 1.0f);
+            if (ft > 0.88f) {
+                barColor = mix(barColor, silver, ((ft - 0.88f) / 0.12f) * gAnalysis.air * 0.55f);
+            }
+        } else {
+            if (ft < 0.45f) barColor = mix(burgundy, current, ft / 0.45f);
+            else if (ft < 0.75f) barColor = mix(current, violet, (ft - 0.45f) / 0.30f * 0.35f);
+            else barColor = mix(current, cyan, (ft - 0.75f) / 0.25f * 0.62f);
+        }
 
         const float lit = 0.58f + v * 0.62f;
         HBRUSH br = CreateSolidBrush(cref(scale(barColor, lit)));
@@ -425,7 +491,7 @@ void paintScene(HWND hwnd, HDC target) {
         DeleteObject(br);
     }
 
-    std::wstring foot = L"DEFAULT MICROPHONE   \u2022   SPACE FREEZE   \u2022   ESC QUIT";
+    std::wstring foot = L"DEFAULT MICROPHONE   \u2022   TAB MODE   \u2022   SPACE FREEZE   \u2022   ESC QUIT";
     drawTextSimple(dc, foot, 28, H - 42, W - 56, 26, 12, FW_NORMAL, RGB(116,118,126));
 
     BitBlt(target, 0, 0, W, H, dc, 0, 0, SRCCOPY);
@@ -471,6 +537,11 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         if (wParam == VK_SPACE) {
             gFrozen = !gFrozen;
+            return 0;
+        }
+        if (wParam == VK_TAB) {
+            gSpectrumMode = !gSpectrumMode;
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
         break;
