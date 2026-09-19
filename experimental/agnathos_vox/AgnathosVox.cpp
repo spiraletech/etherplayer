@@ -1,6 +1,7 @@
 #define UNICODE
 #define _UNICODE
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #include <mmsystem.h>
 
@@ -28,11 +29,11 @@ constexpr int kFftSize = 2048;
 constexpr int kBars = 72;
 constexpr UINT_PTR kTimerId = 1;
 
-struct RGB {
+struct Color {
     int r = 0, g = 0, b = 0;
 };
 
-static RGB mix(RGB a, RGB b, float t) {
+static Color mix(Color a, Color b, float t) {
     t = std::clamp(t, 0.0f, 1.0f);
     return {
         static_cast<int>(a.r + (b.r - a.r) * t),
@@ -41,7 +42,7 @@ static RGB mix(RGB a, RGB b, float t) {
     };
 }
 
-static RGB scale(RGB c, float s) {
+static Color scale(Color c, float s) {
     return {
         std::clamp(static_cast<int>(c.r * s), 0, 255),
         std::clamp(static_cast<int>(c.g * s), 0, 255),
@@ -49,7 +50,7 @@ static RGB scale(RGB c, float s) {
     };
 }
 
-static COLORREF cref(RGB c) {
+static COLORREF cref(Color c) {
     return RGB(std::clamp(c.r,0,255), std::clamp(c.g,0,255), std::clamp(c.b,0,255));
 }
 
@@ -286,14 +287,14 @@ static std::wstring noteName(float hz) {
     return std::wstring(names[idx]) + std::to_wstring(octave);
 }
 
-static RGB paletteFromVoice(float pitch, float edge, float air, float rms) {
-    const RGB burgundy{92, 18, 52};
-    const RGB violet{122, 58, 188};
-    const RGB cyan{63, 188, 211};
-    const RGB silver{211, 222, 230};
-    const RGB rust{212, 72, 42};
+static Color paletteFromVoice(float pitch, float edge, float air, float rms) {
+    const Color burgundy{92, 18, 52};
+    const Color violet{122, 58, 188};
+    const Color cyan{63, 188, 211};
+    const Color silver{211, 222, 230};
+    const Color rust{212, 72, 42};
 
-    RGB c = violet;
+    Color c = violet;
     if (pitch > 0.0f) {
         if (pitch < 200.0f) {
             c = mix(burgundy, violet, std::clamp((pitch - 140.0f) / 60.0f, 0.0f, 1.0f));
@@ -350,12 +351,12 @@ void paintScene(HWND hwnd, HDC target) {
     FillRect(dc, &rc, bg);
     DeleteObject(bg);
 
-    const RGB current = paletteFromVoice(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms);
-    const RGB burgundy{92, 18, 52};
-    const RGB violet{122, 58, 188};
-    const RGB cyan{63, 188, 211};
-    const RGB silver{211, 222, 230};
-    const RGB rust{212, 72, 42};
+    const Color current = paletteFromVoice(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms);
+    const Color burgundy{92, 18, 52};
+    const Color violet{122, 58, 188};
+    const Color cyan{63, 188, 211};
+    const Color silver{211, 222, 230};
+    const Color rust{212, 72, 42};
 
     drawTextSimple(dc, L"AGNATHOS / VOX", 28, 18, 360, 34, 20, FW_SEMIBOLD, RGB(225,225,230));
     drawTextSimple(dc, gMicOk ? (gFrozen ? L"FROZEN" : L"LIVE INPUT") : L"MIC OFFLINE",
@@ -412,7 +413,7 @@ void paintScene(HWND hwnd, HDC target) {
         const int x1 = 28 + static_cast<int>((i + 1) * bw) - gap;
         const float ft = static_cast<float>(i) / (kBars - 1);
 
-        RGB barColor;
+        Color barColor;
         if (ft < 0.45f) barColor = mix(burgundy, current, ft / 0.45f);
         else if (ft < 0.75f) barColor = mix(current, violet, (ft - 0.45f) / 0.30f * 0.35f);
         else barColor = mix(current, cyan, (ft - 0.75f) / 0.25f * 0.62f);
