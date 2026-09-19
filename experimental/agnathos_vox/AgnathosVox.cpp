@@ -374,7 +374,7 @@ void paintScene(HWND hwnd, HDC target) {
     const int swY = 182;
     const int swH = 24;
     const int swW = std::max(50, (W - 56) / 5);
-    std::array<RGB,5> swatches{
+    std::array<Color,5> swatches{
         scale(current, 0.58f),
         current,
         mix(current, cyan, 0.45f + gAnalysis.air * 0.35f),
