@@ -356,12 +356,106 @@ static Color paletteFromVoice(float pitch, float edge, float air, float rms) {
     return scale(c, brightness);
 }
 
+
+enum class VisualMode {
+    Weather = 0,
+    Spectrum = 1,
+    Agnathos = 2
+};
+
+enum class WeatherKind {
+    Fog = 0,
+    Rain,
+    Storm,
+    Ember,
+    Aurora,
+    Glare,
+    AcidSky
+};
+
+struct WeatherPalette {
+    const wchar_t* name;
+    Color low;
+    Color mid;
+    Color high;
+    Color sky;
+};
+
+static WeatherPalette weatherPalette(WeatherKind kind) {
+    switch (kind) {
+    case WeatherKind::Rain:
+        return {L"RAIN", {24, 58, 96}, {52, 114, 166}, {146, 196, 222}, {10, 18, 28}};
+    case WeatherKind::Storm:
+        return {L"STORM", {50, 18, 74}, {126, 34, 94}, {205, 218, 236}, {15, 8, 22}};
+    case WeatherKind::Ember:
+        return {L"EMBER", {88, 20, 18}, {212, 58, 24}, {255, 170, 52}, {24, 8, 6}};
+    case WeatherKind::Aurora:
+        return {L"AURORA", {28, 88, 118}, {62, 170, 158}, {160, 102, 222}, {7, 20, 24}};
+    case WeatherKind::Glare:
+        return {L"GLARE", {126, 92, 24}, {226, 176, 54}, {244, 236, 198}, {26, 22, 10}};
+    case WeatherKind::AcidSky:
+        return {L"ACID SKY", {54, 112, 30}, {154, 202, 44}, {202, 72, 210}, {12, 22, 8}};
+    case WeatherKind::Fog:
+    default:
+        return {L"FOG", {52, 58, 74}, {92, 104, 126}, {170, 180, 194}, {12, 13, 18}};
+    }
+}
+
+static float averageBars(const std::array<float, kBars>& bars, int begin, int end) {
+    begin = std::clamp(begin, 0, kBars);
+    end = std::clamp(end, begin + 1, kBars);
+    float sum = 0.0f;
+    for (int i = begin; i < end; ++i) sum += bars[i];
+    return sum / static_cast<float>(end - begin);
+}
+
+static WeatherKind chooseWeather(const Analysis& a, const std::array<float, kBars>& bars) {
+    const float low = averageBars(bars, 0, 24);
+    const float mid = averageBars(bars, 24, 48);
+    const float high = averageBars(bars, 48, 72);
+    const float intensity = std::clamp(a.rms * 8.5f, 0.0f, 1.0f);
+    const float voiced = a.pitchHz > 0.0f ? 1.0f : 0.0f;
+
+    std::array<float, 7> score{};
+    score[static_cast<int>(WeatherKind::Fog)] =
+        (1.0f - intensity) * 0.54f + low * 0.18f + (1.0f - a.air) * 0.18f + (1.0f - a.edge) * 0.10f;
+    score[static_cast<int>(WeatherKind::Rain)] =
+        mid * 0.32f + high * 0.18f + (1.0f - intensity) * 0.22f + (1.0f - a.edge) * 0.18f + a.air * 0.10f;
+    score[static_cast<int>(WeatherKind::Storm)] =
+        intensity * 0.42f + low * 0.28f + a.edge * 0.20f + mid * 0.10f;
+    score[static_cast<int>(WeatherKind::Ember)] =
+        a.edge * 0.44f + intensity * 0.30f + low * 0.16f + mid * 0.10f;
+    score[static_cast<int>(WeatherKind::Aurora)] =
+        a.air * 0.28f + high * 0.20f + mid * 0.18f + voiced * 0.22f + (1.0f - a.edge) * 0.12f;
+    score[static_cast<int>(WeatherKind::Glare)] =
+        high * 0.34f + a.air * 0.30f + intensity * 0.26f + voiced * 0.10f;
+    score[static_cast<int>(WeatherKind::AcidSky)] =
+        a.edge * 0.32f + a.air * 0.24f + high * 0.22f + intensity * 0.12f + std::fabs(high - low) * 0.10f;
+
+    int best = 0;
+    for (int i = 1; i < static_cast<int>(score.size()); ++i) {
+        if (score[i] > score[best]) best = i;
+    }
+    return static_cast<WeatherKind>(best);
+}
+
+static Color weatherBandColor(const WeatherPalette& p, float ft) {
+    ft = std::clamp(ft, 0.0f, 1.0f);
+    if (ft < 0.52f) return mix(p.low, p.mid, ft / 0.52f);
+    return mix(p.mid, p.high, (ft - 0.52f) / 0.48f);
+}
+
 AudioCapture gAudio;
 Analysis gAnalysis{};
 std::array<float, kBars> gSmoothBars{};
 bool gMicOk = false;
 bool gFrozen = false;
-bool gSpectrumMode = true;
+VisualMode gVisualMode = VisualMode::Weather;
+WeatherKind gWeather = WeatherKind::Fog;
+WeatherKind gWeatherCandidate = WeatherKind::Fog;
+int gWeatherCandidateFrames = 0;
+float gPreviousRms = 0.0f;
+float gFlash = 0.0f;
 
 HFONT makeFont(int px, int weight) {
     return CreateFontW(
@@ -392,13 +486,22 @@ void paintScene(HWND hwnd, HDC target) {
     HBITMAP bmp = CreateCompatibleBitmap(target, std::max(W,1), std::max(H,1));
     HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(dc, bmp));
 
-    HBRUSH bg = CreateSolidBrush(RGB(7, 7, 10));
+    const WeatherPalette weather = weatherPalette(gWeather);
+    Color background{7, 7, 10};
+    if (gVisualMode == VisualMode::Weather) {
+        background = mix(background, weather.sky, 0.52f);
+        background = mix(background, Color{255,255,255}, gFlash * 0.10f);
+    }
+    HBRUSH bg = CreateSolidBrush(cref(background));
     FillRect(dc, &rc, bg);
     DeleteObject(bg);
 
-    const Color current = gSpectrumMode
-        ? spectrumFromPitch(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms)
-        : paletteFromVoice(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms);
+    const Color current =
+        gVisualMode == VisualMode::Spectrum
+            ? spectrumFromPitch(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms)
+            : gVisualMode == VisualMode::Agnathos
+                ? paletteFromVoice(gAnalysis.pitchHz, gAnalysis.edge, gAnalysis.air, gAnalysis.rms)
+                : mix(weather.mid, weather.high, std::clamp(gAnalysis.air * 0.55f + gAnalysis.rms * 1.8f, 0.0f, 1.0f));
     const Color burgundy{92, 18, 52};
     const Color violet{122, 58, 188};
     const Color cyan{63, 188, 211};
@@ -406,7 +509,11 @@ void paintScene(HWND hwnd, HDC target) {
     const Color rust{212, 72, 42};
 
     drawTextSimple(dc, L"AGNATHOS / VOX", 28, 18, 250, 34, 20, FW_SEMIBOLD, RGB(225,225,230));
-    drawTextSimple(dc, gSpectrumMode ? L"SPECTRUM" : L"AGNATHOS", 260, 18, 180, 34, 12, FW_SEMIBOLD, cref(current));
+    std::wstring modeLabel;
+    if (gVisualMode == VisualMode::Weather) modeLabel = std::wstring(L"WEATHER / ") + weather.name;
+    else if (gVisualMode == VisualMode::Spectrum) modeLabel = L"SPECTRUM";
+    else modeLabel = L"AGNATHOS";
+    drawTextSimple(dc, modeLabel, 260, 18, 280, 34, 12, FW_SEMIBOLD, cref(current));
     drawTextSimple(dc, gMicOk ? (gFrozen ? L"FROZEN" : L"LIVE INPUT") : L"MIC OFFLINE",
                    W - 220, 18, 190, 34, 14, FW_SEMIBOLD,
                    gMicOk ? RGB(165,170,178) : RGB(225,85,72),
@@ -423,7 +530,15 @@ void paintScene(HWND hwnd, HDC target) {
     const int swH = 24;
     const int swW = std::max(50, (W - 56) / 5);
     std::array<Color,5> swatches{};
-    if (gSpectrumMode) {
+    if (gVisualMode == VisualMode::Weather) {
+        swatches = {
+            scale(weather.low, 0.78f),
+            weather.low,
+            weather.mid,
+            weather.high,
+            mix(weather.high, Color{255,255,255}, 0.42f)
+        };
+    } else if (gVisualMode == VisualMode::Spectrum) {
         swatches = {
             spectrumColor(0.00f, 0.85f),
             spectrumColor(0.25f, 0.90f),
@@ -473,7 +588,16 @@ void paintScene(HWND hwnd, HDC target) {
         const float ft = static_cast<float>(i) / (kBars - 1);
 
         Color barColor;
-        if (gSpectrumMode) {
+        if (gVisualMode == VisualMode::Weather) {
+            const Color frequencyShape = spectrumColor(ft, 1.0f);
+            const Color climate = weatherBandColor(weather, ft);
+            const float weatherPull = 0.62f + std::clamp(gAnalysis.rms * 2.4f + gAnalysis.edge * 0.18f, 0.0f, 0.28f);
+            barColor = mix(frequencyShape, climate, weatherPull);
+
+            // Sudden vocal/beat attacks read as a brief white "lightning" edge.
+            const float flashPull = gFlash * (0.20f + ft * 0.42f) * v;
+            barColor = mix(barColor, Color{245, 248, 255}, flashPull);
+        } else if (gVisualMode == VisualMode::Spectrum) {
             barColor = spectrumColor(ft, 1.0f);
             if (ft > 0.88f) {
                 barColor = mix(barColor, silver, ((ft - 0.88f) / 0.12f) * gAnalysis.air * 0.55f);
@@ -491,7 +615,7 @@ void paintScene(HWND hwnd, HDC target) {
         DeleteObject(br);
     }
 
-    std::wstring foot = L"DEFAULT MICROPHONE   \u2022   TAB MODE   \u2022   SPACE FREEZE   \u2022   ESC QUIT";
+    std::wstring foot = L"DEFAULT MICROPHONE   \u2022   TAB WEATHER / SPECTRUM / AGNATHOS   \u2022   SPACE FREEZE   \u2022   ESC QUIT";
     drawTextSimple(dc, foot, 28, H - 42, W - 56, 26, 12, FW_NORMAL, RGB(116,118,126));
 
     BitBlt(target, 0, 0, W, H, dc, 0, 0, SRCCOPY);
@@ -525,6 +649,25 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (next.bars[i] > gSmoothBars[i]) gSmoothBars[i] = gSmoothBars[i] * 0.55f + next.bars[i] * 0.45f;
                     else gSmoothBars[i] = std::max(next.bars[i], gSmoothBars[i] - fall);
                 }
+
+                const float attack = std::max(0.0f, gAnalysis.rms - gPreviousRms);
+                gFlash = std::max(gFlash * 0.84f, std::clamp(attack * 18.0f, 0.0f, 1.0f));
+                gPreviousRms = gAnalysis.rms;
+
+                const WeatherKind candidate = chooseWeather(gAnalysis, gSmoothBars);
+                if (candidate == gWeather) {
+                    gWeatherCandidate = candidate;
+                    gWeatherCandidateFrames = 0;
+                } else if (candidate == gWeatherCandidate) {
+                    ++gWeatherCandidateFrames;
+                    if (gWeatherCandidateFrames >= 10) {
+                        gWeather = candidate;
+                        gWeatherCandidateFrames = 0;
+                    }
+                } else {
+                    gWeatherCandidate = candidate;
+                    gWeatherCandidateFrames = 1;
+                }
             }
         }
         InvalidateRect(hwnd, nullptr, FALSE);
@@ -540,7 +683,8 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         if (wParam == VK_TAB) {
-            gSpectrumMode = !gSpectrumMode;
+            const int nextMode = (static_cast<int>(gVisualMode) + 1) % 3;
+            gVisualMode = static_cast<VisualMode>(nextMode);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
