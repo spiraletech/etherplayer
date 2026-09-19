@@ -208,6 +208,7 @@ struct Analysis {
     float edge = 0.0f;
     float air = 0.0f;
     float centroidHz = 0.0f;
+    float peakHz = 0.0f;
     float lowEnergy = 0.0f;
     float midEnergy = 0.0f;
     float highEnergy = 0.0f;
@@ -348,12 +349,18 @@ static Analysis analyze(const std::array<float, kFftSize>& input) {
     double midBand = 0.0;
     double highBand = 0.0;
     double weightedHz = 0.0;
+    float spectralPeakMag = 0.0f;
+    float spectralPeakHz = 0.0f;
     for (int k = 1; k < kFftSize / 2; ++k) {
         const float hz = static_cast<float>(k) * kSampleRate / kFftSize;
         const float m = magAt(k);
         if (hz >= 55.0f && hz <= 10000.0f) {
             total += m;
             weightedHz += hz * m;
+            if (m > spectralPeakMag) {
+                spectralPeakMag = m;
+                spectralPeakHz = hz;
+            }
         }
         if (hz >= 55.0f && hz < 250.0f) lowBand += m;
         if (hz >= 250.0f && hz < 2000.0f) midBand += m;
@@ -365,6 +372,7 @@ static Analysis analyze(const std::array<float, kFftSize>& input) {
     const float highRatio = total > 0.0 ? static_cast<float>(high / total) : 0.0f;
     const float airRatio = total > 0.0 ? static_cast<float>(air / total) : 0.0f;
     out.centroidHz = total > 0.0 ? static_cast<float>(weightedHz / total) : 0.0f;
+    out.peakHz = spectralPeakHz;
     out.lowEnergy = total > 0.0 ? static_cast<float>(lowBand / total) : 0.0f;
     out.midEnergy = total > 0.0 ? static_cast<float>(midBand / total) : 0.0f;
     out.highEnergy = total > 0.0 ? static_cast<float>(highBand / total) : 0.0f;
@@ -531,6 +539,8 @@ struct ChameleonState {
     float memoryCentroid = 0.0f;
     float anchorInfluence = 0.0f;
     int activeAnchor = -1;
+    int secondaryAnchor = -1;
+    float secondaryAnchorStrength = 0.0f;
 };
 
 static float hueDistance(float from, float to) {
@@ -674,68 +684,64 @@ void paintScene(HWND hwnd, HDC target) {
     const Color silver{211, 222, 230};
     const Color rust{212, 72, 42};
 
-    drawTextSimple(dc, L"AGNATHOS / VOX", 28, 18, 250, 34, 20, FW_SEMIBOLD, RGB(225,225,230));
+    drawTextSimple(dc, L"AGNATHOS / VOX", 28, 16, 250, 32, 20, FW_SEMIBOLD, RGB(225,225,230));
+
     std::wstring modeLabel;
     if (gVisualMode == VisualMode::Weather) modeLabel = std::wstring(L"CHAMELEON / ") + weather.name;
     else if (gVisualMode == VisualMode::Spectrum) modeLabel = L"SPECTRUM";
     else modeLabel = L"AGNATHOS";
-    drawTextSimple(dc, modeLabel, 260, 18, 280, 34, 12, FW_SEMIBOLD, cref(current));
+    drawTextSimple(dc, modeLabel, 260, 16, 300, 32, 12, FW_SEMIBOLD, cref(current));
     drawTextSimple(dc, gMicOk ? (gFrozen ? L"FROZEN" : L"LIVE INPUT") : L"MIC OFFLINE",
-                   W - 220, 18, 190, 34, 14, FW_SEMIBOLD,
+                   W - 220, 16, 190, 32, 14, FW_SEMIBOLD,
                    gMicOk ? RGB(165,170,178) : RGB(225,85,72),
                    DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
-    std::wstring big = L"-- Hz";
-    if (gAnalysis.pitchHz > 0.0f) {
-        big = std::to_wstring(static_cast<int>(std::lround(gAnalysis.pitchHz))) + L" Hz";
-    }
-    drawTextSimple(dc, big, 28, 66, W - 56, 72, 48, FW_LIGHT, cref(current));
-    drawTextSimple(dc, noteName(gAnalysis.pitchHz), 32, 130, 150, 38, 22, FW_SEMIBOLD, RGB(178,180,188));
+    // One analyzer below; the split lives only in the numeric HUD.
+    std::wstring freqValue = gAnalysis.peakHz > 0.0f
+        ? std::to_wstring(static_cast<int>(std::lround(gAnalysis.peakHz))) + L" Hz"
+        : L"-- Hz";
+    std::wstring pitchValue = gAnalysis.pitchHz > 0.0f
+        ? std::to_wstring(static_cast<int>(std::lround(gAnalysis.pitchHz))) + L" Hz  " + noteName(gAnalysis.pitchHz)
+        : L"-- Hz  --";
 
-    if (gChameleon.activeAnchor >= 0 && gChameleon.anchorInfluence > 0.10f) {
-        std::wstring anchorText = std::wstring(L"ANCHOR FAMILY  ") +
-            kAnchorNames[gChameleon.activeAnchor] + L" Hz";
-        drawTextSimple(dc, anchorText, 178, 132, 290, 34, 13, FW_SEMIBOLD,
-                       cref(hsv(gChameleon.hue + 34.0f, 0.72f, 0.92f)));
+    std::wstring dominant = L"--";
+    std::wstring secondary = L"--";
+    if (gChameleon.activeAnchor >= 0) {
+        const int confidence = static_cast<int>(std::lround(
+            std::clamp(gChameleon.anchorInfluence, 0.0f, 1.0f) * 100.0f));
+        dominant = std::wstring(kAnchorNames[gChameleon.activeAnchor]) + L" Hz  " +
+            std::to_wstring(confidence) + L"%";
     }
-
-    const int swY = 182;
-    const int swH = 24;
-    const int swW = std::max(50, (W - 56) / 5);
-    std::array<Color,5> swatches{};
-    if (gVisualMode == VisualMode::Weather) {
-        swatches = {
-            hsv(gChameleon.hue - 58.0f, gChameleon.saturation * 0.88f, gChameleon.value * 0.66f),
-            hsv(gChameleon.hue - 26.0f, gChameleon.saturation, gChameleon.value * 0.82f),
-            hsv(gChameleon.hue, gChameleon.saturation, gChameleon.value),
-            hsv(gChameleon.hue + 34.0f, std::min(1.0f, gChameleon.saturation + 0.08f), std::min(1.0f, gChameleon.value + 0.10f)),
-            hsv(gChameleon.hue + 72.0f, gChameleon.saturation * 0.68f, std::min(1.0f, gChameleon.value + 0.18f))
-        };
-    } else if (gVisualMode == VisualMode::Spectrum) {
-        swatches = {
-            spectrumColor(0.00f, 0.85f),
-            spectrumColor(0.25f, 0.90f),
-            spectrumColor(0.50f, 0.95f),
-            spectrumColor(0.75f, 1.00f),
-            spectrumColor(1.00f, 1.00f)
-        };
-    } else {
-        swatches = {
-            scale(current, 0.58f),
-            current,
-            mix(current, cyan, 0.45f + gAnalysis.air * 0.35f),
-            mix(current, rust, 0.45f + gAnalysis.edge * 0.45f),
-            mix(current, silver, 0.65f)
-        };
-    }
-    for (int i = 0; i < 5; ++i) {
-        RECT s{28 + i * swW, swY, 28 + (i + 1) * swW - 4, swY + swH};
-        HBRUSH br = CreateSolidBrush(cref(swatches[i]));
-        FillRect(dc, &s, br);
-        DeleteObject(br);
+    if (gChameleon.secondaryAnchor >= 0) {
+        const int confidence = static_cast<int>(std::lround(
+            std::clamp(gChameleon.secondaryAnchorStrength, 0.0f, 1.0f) * 100.0f));
+        secondary = std::wstring(kAnchorNames[gChameleon.secondaryAnchor]) + L" Hz  " +
+            std::to_wstring(confidence) + L"%";
     }
 
-    int meterY = swY + 42;
+    const int colGap = 18;
+    const int colW = std::max(210, (W - 56 - colGap) / 2);
+    const int leftX = 28;
+    const int rightX = 28 + colW + colGap;
+
+    drawTextSimple(dc, L"FREQUENCY ANALYSIS", leftX, 58, colW, 20, 11, FW_SEMIBOLD, RGB(118,122,132));
+    drawTextSimple(dc, freqValue, leftX, 79, colW, 42, 31, FW_LIGHT, cref(current));
+    drawTextSimple(dc, std::wstring(L"PITCH  ") + pitchValue, leftX, 118, colW, 25, 13, FW_SEMIBOLD, RGB(178,180,188));
+
+    drawTextSimple(dc, L"RESONANCE ANALYSIS", rightX, 58, colW, 20, 11, FW_SEMIBOLD, RGB(118,122,132));
+    drawTextSimple(dc, dominant, rightX, 79, colW, 42, 31, FW_LIGHT,
+                   cref(hsv(gChameleon.hue + 34.0f, 0.78f, 0.96f)));
+    drawTextSimple(dc, std::wstring(L"SECONDARY  ") + secondary, rightX, 118, colW, 25, 13, FW_SEMIBOLD, RGB(178,180,188));
+
+    const int lowPct = static_cast<int>(std::lround(std::clamp(gAnalysis.lowEnergy, 0.0f, 1.0f) * 100.0f));
+    const int midPct = static_cast<int>(std::lround(std::clamp(gAnalysis.midEnergy, 0.0f, 1.0f) * 100.0f));
+    const int highPct = static_cast<int>(std::lround(std::clamp(gAnalysis.highEnergy, 0.0f, 1.0f) * 100.0f));
+    std::wstring mixText = L"LOW " + std::to_wstring(lowPct) + L"%   MID " +
+        std::to_wstring(midPct) + L"%   HIGH " + std::to_wstring(highPct) +
+        L"%   CENTROID " + std::to_wstring(static_cast<int>(std::lround(gAnalysis.centroidHz))) + L" Hz";
+    drawTextSimple(dc, mixText, 28, 151, W - 56, 24, 12, FW_NORMAL, RGB(134,138,148));
+
+    int meterY = 184;
     RECT meterBg{28, meterY, W - 28, meterY + 3};
     HBRUSH mb = CreateSolidBrush(RGB(34,34,42));
     FillRect(dc, &meterBg, mb);
@@ -754,17 +760,7 @@ void paintScene(HWND hwnd, HDC target) {
     const float bw = totalW / kBars;
 
     for (int i = 0; i < kBars; ++i) {
-        float v = std::clamp(gSmoothBars[i], 0.0f, 1.0f);
-        if (gVisualMode == VisualMode::Weather) {
-            for (int a = 0; a < kAnchors; ++a) {
-                const int anchorBar = logBarIndexForHz(kAnchorHz[a]);
-                const int distance = std::abs(i - anchorBar);
-                if (distance <= 1) {
-                    const float bump = gAnchorSmooth[a] * (distance == 0 ? 0.86f : 0.34f);
-                    v = std::max(v, bump);
-                }
-            }
-        }
+        const float v = std::clamp(gSmoothBars[i], 0.0f, 1.0f);
         const int bh = static_cast<int>(v * usableH);
         const int x0 = 28 + static_cast<int>(i * bw);
         const int x1 = 28 + static_cast<int>((i + 1) * bw) - gap;
@@ -790,7 +786,10 @@ void paintScene(HWND hwnd, HDC target) {
             }
 
             barColor = chameleonColor(gChameleon, ft, v);
-            barColor = mix(barColor, anchorColor, std::clamp(anchorGlow * 0.72f, 0.0f, 0.72f));
+            barColor = mix(barColor, anchorColor, std::clamp(anchorGlow * 0.66f, 0.0f, 0.66f));
+            if (anchorGlow > 0.0f) {
+                barColor = mix(barColor, Color{255,255,255}, std::clamp(anchorGlow * 0.16f, 0.0f, 0.16f));
+            }
 
             // Sudden vocal/beat attacks read as a brief white "lightning" edge.
             const float flashPull = gFlash * (0.16f + ft * 0.34f) * v;
@@ -813,7 +812,7 @@ void paintScene(HWND hwnd, HDC target) {
         DeleteObject(br);
     }
 
-    std::wstring foot = L"DEFAULT MICROPHONE   \u2022   TAB CHAMELEON / SPECTRUM / AGNATHOS   \u2022   SPACE FREEZE   \u2022   ESC QUIT";
+    std::wstring foot = L"ONE BLENDED ANALYZER   \u2022   TAB CHAMELEON / SPECTRUM / AGNATHOS   \u2022   SPACE FREEZE   \u2022   ESC QUIT";
     drawTextSimple(dc, foot, 28, H - 42, W - 56, 26, 12, FW_NORMAL, RGB(116,118,126));
 
     BitBlt(target, 0, 0, W, H, dc, 0, 0, SRCCOPY);
@@ -843,6 +842,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 gAnalysis.edge = gAnalysis.edge * 0.72f + next.edge * 0.28f;
                 gAnalysis.air = gAnalysis.air * 0.72f + next.air * 0.28f;
                 gAnalysis.centroidHz = gAnalysis.centroidHz * 0.82f + next.centroidHz * 0.18f;
+                gAnalysis.peakHz = gAnalysis.peakHz * 0.68f + next.peakHz * 0.32f;
                 gAnalysis.lowEnergy = gAnalysis.lowEnergy * 0.82f + next.lowEnergy * 0.18f;
                 gAnalysis.midEnergy = gAnalysis.midEnergy * 0.82f + next.midEnergy * 0.18f;
                 gAnalysis.highEnergy = gAnalysis.highEnergy * 0.82f + next.highEnergy * 0.18f;
@@ -862,14 +862,24 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
 
                 int strongestAnchor = -1;
+                int secondAnchor = -1;
                 float strongestValue = 0.0f;
+                float secondValue = 0.0f;
                 for (int i = 0; i < kAnchors; ++i) {
-                    if (gAnchorSmooth[i] > strongestValue) {
-                        strongestValue = gAnchorSmooth[i];
+                    const float v = gAnchorSmooth[i];
+                    if (v > strongestValue) {
+                        secondValue = strongestValue;
+                        secondAnchor = strongestAnchor;
+                        strongestValue = v;
                         strongestAnchor = i;
+                    } else if (v > secondValue) {
+                        secondValue = v;
+                        secondAnchor = i;
                     }
                 }
                 gChameleon.activeAnchor = strongestValue > 0.10f ? strongestAnchor : -1;
+                gChameleon.secondaryAnchor = secondValue > 0.08f ? secondAnchor : -1;
+                gChameleon.secondaryAnchorStrength = secondValue;
                 gChameleon.anchorInfluence += (strongestValue - gChameleon.anchorInfluence) * 0.045f;
 
                 // Long-ish memory: the climate remembers the previous phrase instead of repainting every frame.
